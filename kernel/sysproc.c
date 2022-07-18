@@ -81,6 +81,30 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  // number of pages to check
+  int cnt;
+  argint(1, &cnt);
+  if(cnt < 0 || cnt > 32){
+      return -1;
+  }
+  uint64 pg_addr;// address of the first page to check
+  uint64 res_addr;// address of the ans
+
+  argaddr(0, &pg_addr);
+  argaddr(2, &res_addr);
+
+  unsigned int bitmask = 0;
+  pagetable_t pagetable = myproc()->pagetable;
+  for(int i = 0; i < cnt; ++i){
+    pte_t *pte = walk(pagetable, pg_addr + i * PGSIZE, 0);
+    if(*pte & PTE_A){
+        *pte &= (~PTE_A);
+        bitmask |= (1 << i);
+    }
+  }
+  if(copyout(myproc()->pagetable, res_addr, (char *)&bitmask, sizeof(bitmask)) < 0){
+    return -1;
+  }
   return 0;
 }
 #endif
