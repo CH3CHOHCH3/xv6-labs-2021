@@ -126,6 +126,7 @@ found:
     release(&p->lock);
     return 0;
   }
+  p->alarmframe = p->trapframe + 1;
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -141,6 +142,7 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->interval = 0;
   return p;
 }
 
