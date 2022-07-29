@@ -65,6 +65,19 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 15 || r_scause() == 12){
+    if(r_stval() > p->sz){
+      p->killed = 1;
+    } else {
+      pte_t *pte = walk(p->pagetable, r_stval(), 0);
+      if(pte && (*pte & PTE_V) && (*pte & PTE_COW)){
+        if(transfer(pte) < 0){
+            p->killed = 1;
+        }
+      }else{
+          p->killed = 1;
+      }
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

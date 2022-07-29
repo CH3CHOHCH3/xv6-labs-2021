@@ -13,7 +13,51 @@ void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+int refer[32700];
+struct spinlock rf_lock;
 
+int add_refer(uint64 pa){
+    int cnt;
+    acquire(&rf_lock);
+    cnt = ++refer[(pa - (uint64)end) >> 12];
+    release(&rf_lock);
+    return cnt;
+}
+
+int sub_refer(uint64 pa){
+    int cnt;
+    acquire(&rf_lock);
+    cnt = --refer[(pa - (uint64)end) >> 12];
+    release(&rf_lock);
+    return cnt;
+}
+
+int get_refer(uint64 pa){
+    return refer[(pa - (uint64)end) >> 12];
+}
+
+int transfer(pte_t *pte){
+    uint64 pa = PTE2PA(*pte);
+    *pte |= PTE_W;
+    *pte &= ~PTE_COW;
+    acquire(&rf_lock);
+    if(get_refer(pa) > 1){
+        char *mem;
+        if((mem = kalloc()) == 0){
+            release(&rf_lock);
+            return -1;
+        }else{
+          memmove(mem, (char *)pa, PGSIZE);
+          *pte = PA2PTE((uint64)mem) | PTE_FLAGS(*pte);
+          --refer[(pa - (uint64)end) >> 12];
+          release(&rf_lock);
+          return 0;
+        }
+    } else{
+        release(&rf_lock);
+        return 0;
+    }
+}
 struct run {
   struct run *next;
 };
@@ -27,6 +71,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&rf_lock, "refer");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,6 +96,9 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  if(sub_refer((uint64)pa) > 0){
+    return;
+  }
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -76,7 +124,10 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    refer[((uint64)r - (uint64)end) >> 12] = 1;
+  }
   return (void*)r;
 }
+
