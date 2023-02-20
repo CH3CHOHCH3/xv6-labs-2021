@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sysinfo.h"
 
 struct cpu cpus[NCPU];
 
@@ -315,6 +316,7 @@ fork(void)
   np->state = RUNNABLE;
   release(&np->lock);
 
+  np->trace_mask = p->trace_mask;
   return pid;
 }
 
@@ -653,4 +655,43 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 sys_trace(void){
+    int mask;
+
+    if(argint(0, &mask) < 0)
+        return -1;
+    myproc()->trace_mask = mask;
+    return 0;
+}
+
+int nproc(void){
+    int cnt = 0;
+    struct proc *p;
+    for(p = proc;p < &proc[NPROC]; p++){
+        if(p->state != UNUSED){
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+uint64 sys_sysinfo(void){
+    struct sysinfo sysif;
+    uint64 addr;
+
+    // addr 即用户态参数的 sysinfo 结构体指针
+    argaddr(0, &addr);
+
+    if(addr < 0){
+        return -1;
+    }
+    sysif.freemem = freemem();
+    sysif.nproc = nproc();
+    // 把内核态的 sysinfo 复制到用户态的参数指针处
+    if(copyout(myproc()->pagetable, addr, (char *)&sysif, sizeof(sysif)) < 0){
+        return -1;
+    }
+    return 0;
 }
