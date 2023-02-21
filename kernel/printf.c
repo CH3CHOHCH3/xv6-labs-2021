@@ -132,3 +132,15 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace(void){
+    printf("backtrace:\n");
+    // 当前函数的栈帧地址
+    uint64 fp = r_fp();
+    // riscv 栈地址从高到底增长，此为栈底地址
+    uint64 up = PGROUNDUP(fp);
+    while(fp < up){
+        printf("%p\n", *((uint64*)(fp - 8)));
+        fp = *((uint64*)(fp - 16));
+    }
+}
