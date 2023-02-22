@@ -67,6 +67,28 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 15 || r_scause() == 12){
+    // riscv 有 3 种 page fault：
+    // 1. Exception code = 12：取指令导致
+    // 1. Exception code = 13：读内存导致
+    // 1. Exception code = 15：写内存导致
+
+    // 判断是否是 COW 导致了缺页
+    
+    uint64 val = r_stval();
+    if(val > p->sz){
+      p->killed = 1;
+    } else {
+      pte_t *pte = walk(p->pagetable, val, 0);
+      if(pte && (*pte & PTE_V) && (*pte & PTE_COW)){
+        // 的确是 cow 导致的缺页
+        if(cowalloc(pte) != 0){
+          p->killed = 1; 
+        }
+      } else {
+        p->killed = 1;
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

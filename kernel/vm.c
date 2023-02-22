@@ -303,7 +303,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,7 +311,12 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    // 将 PTE_W 置为 0
+    *pte &= ~PTE_W;
+    // 标记 PTE_COW 位
+    *pte |= PTE_COW;
     flags = PTE_FLAGS(*pte);
+    /*
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
@@ -319,6 +324,14 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       kfree(mem);
       goto err;
     }
+    */
+    // 不给子进程分配新物理页，直接将其页表映射到父进程的物理页
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      goto err;
+    }
+    // 增加页面引用数
+    addrefer(pa);
+    
   }
   return 0;
 
@@ -350,9 +363,33 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+
+    
+    /* pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    */
+    if(va0 >= MAXVA){
+        return -1;
+    }
+    // 内核向进程地址空间写入内容，也可能触发 cow 导致的 page fault
+    // 首先对要写入的虚拟地址对应的 pte 进行检查
+
+    // 因为要检查 cow 位，不能直接用 walkaddr；
+    // 为了少 walk 一遍，walkaddr 中的检查工作在这里重复一遍；
+    pte_t *pte = walk(pagetable, va0, 0);
+    if(!pte || !(*pte & PTE_V) || !(*pte & PTE_U)){
+      return -1;
+    }
+    // 检查 cow 位
+    if(*pte & PTE_COW){
+      if(cowalloc(pte) < 0){
+        return -1;
+      }
+    }
+    // 直接从 pte 获取物理地址即可
+    pa0 = PTE2PA(*pte);
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
