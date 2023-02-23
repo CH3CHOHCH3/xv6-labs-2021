@@ -81,29 +81,38 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
-  // number of pages to check
-  int cnt;
-  argint(1, &cnt);
-  if(cnt < 0 || cnt > 32){
-      return -1;
-  }
-  uint64 pg_addr;// address of the first page to check
-  uint64 res_addr;// address of the ans
+  
+  int len;          // 检测页面数
+  uint64 base;      // 检测起始地址
+  uint64 mask;       // 检测答案地址
 
-  argaddr(0, &pg_addr);
-  argaddr(2, &res_addr);
+  argaddr(0, &base);
+  argint(1, &len);
+  argaddr(2, &mask);
 
-  unsigned int bitmask = 0;
+  int rnd = 0;      // 每 8 个页面统计完，写回一个 byte
+  char ans = 0;     // 以 byte 为单位的答案
   pagetable_t pagetable = myproc()->pagetable;
-  for(int i = 0; i < cnt; ++i){
-    pte_t *pte = walk(pagetable, pg_addr + i * PGSIZE, 0);
+
+  for(int i = 0; i < len; ++i){
+    pte_t *pte = walk(pagetable, base + i*PGSIZE, 0);
     if(*pte & PTE_A){
         *pte &= (~PTE_A);
-        bitmask |= (1 << i);
+        ans |= (1 << rnd);
+    }
+    if((++rnd) == 8){
+        if(copyout(myproc()->pagetable, (uint64)mask, (char *)&ans, 1) < 0){
+            return -1;
+        }
+        rnd = 0;
+        ans = 0;
+        mask++;
     }
   }
-  if(copyout(myproc()->pagetable, res_addr, (char *)&bitmask, sizeof(bitmask)) < 0){
-    return -1;
+  if(rnd){
+    if(copyout(myproc()->pagetable, (uint64)mask, (char *)&ans, 1) < 0){
+        return -1; 
+    }
   }
   return 0;
 }
