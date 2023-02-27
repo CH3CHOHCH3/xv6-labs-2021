@@ -322,6 +322,32 @@ sys_open(void)
     return -1;
   }
 
+  // 软链接，要找到其指向的文件；
+  // 最多找 10 层，找不到就报错；
+  if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){
+    int finded = 0;
+    char target[MAXPATH];
+    for(int dep = 0; dep < 10; ++dep){
+      if(readi(ip, 0, (uint64)target, 0, MAXPATH) != MAXPATH){
+        panic("sys_open: readi symlink.");
+      }
+      iunlockput(ip);
+      if((ip = namei(target)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      if(ip->type != T_SYMLINK){
+        finded = 1;
+        break;
+      }
+    }
+    if(!finded){
+      end_op();
+      return -1;
+    }
+  }
+
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
@@ -482,5 +508,25 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64 sys_symlink(void){
+  struct inode *ip;
+  char path[MAXPATH];
+  char target[MAXPATH];
+
+  begin_op();
+  if((argstr(0, target, MAXPATH)) < 0 ||
+     argstr(1, path, MAXPATH) < 0 ||
+     (ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+  if(writei(ip, 0, (uint64)target, 0, sizeof(target)) != sizeof(target)){
+    panic("sys_symlink: writei");
+  }
+  iunlockput(ip);
+  end_op();
   return 0;
 }
