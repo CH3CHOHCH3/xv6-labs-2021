@@ -102,7 +102,27 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
-  
+
+  // 下一个 tx_desc 的 index.
+  acquire(&e1000_lock);
+  int idx = regs[E1000_TDT];
+  // 检查该 tx_desc 是否可用.
+  if((tx_ring[idx].status & E1000_TXD_STAT_DD) == 0){
+    release(&e1000_lock);
+    return -1;
+  }
+  // 释放该 tx_desc 最后发送的 mbuf
+  if(tx_mbufs[idx]){
+    m->next = tx_mbufs[idx]->next;
+    mbuffree(tx_mbufs[idx]);
+  }
+  tx_mbufs[idx] = m;
+  tx_ring[idx].addr = (uint64)(tx_mbufs[idx]->head);
+  tx_ring[idx].length = (uint64)(tx_mbufs[idx]->len);
+  tx_ring[idx].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+
+  regs[E1000_TDT] = (idx + 1)%TX_RING_SIZE;
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +135,20 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  while(1){
+    int idx = (regs[E1000_RDT] + 1)%RX_RING_SIZE;;
+
+    if((rx_ring[idx].status & E1000_RXD_STAT_DD) == 0){
+      return;
+    }
+    
+    rx_mbufs[idx]->len = rx_ring[idx].length;
+    net_rx(rx_mbufs[idx]);
+    rx_mbufs[idx] = mbufalloc(0);
+    rx_ring[idx].addr = (uint64) rx_mbufs[idx]->head;
+    rx_ring[idx].status = 0;
+    regs[E1000_RDT] = idx;
+  }
 }
 
 void
