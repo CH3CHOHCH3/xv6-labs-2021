@@ -6,6 +6,10 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 uint64
 sys_exit(void)
@@ -94,4 +98,53 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64 sys_mmap(void){
+  int len, prot, flags, fd;
+
+  argint(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(4, &fd);
+
+  len = PGROUNDUP(len);
+  struct proc *p = myproc();
+  // 是否打开了文件 fd
+  if(p->ofile[fd] == 0){
+    return -1;
+  }
+  if(flags & MAP_SHARED){
+    if(!(p->ofile[fd]->readable) && (prot & PROT_READ)) {
+      return -1;
+    }
+    if(!(p->ofile[fd]->writable) && (prot & PROT_WRITE)) {
+      return -1;
+    }
+  }
+  for(int i = 0; i < VMACNT; ++i){
+    // 找空闲 vma
+    if(p->vmas[i].start == 0){
+      p->vmas[i].start = p->sz;
+      p->sz += len;
+
+      p->vmas[i].len = len;
+      p->vmas[i].prot = prot;
+      p->vmas[i].flags = flags;
+      p->vmas[i].f = filedup(p->ofile[fd]);
+
+      return p->vmas[i].start;
+    }
+  }
+  return -1;
+}
+
+uint64 sys_munmap(void){
+  int len;
+  uint64 start;
+
+  argaddr(0, &start);
+  argint(1, &len);
+
+  return munmap(start, len);
 }

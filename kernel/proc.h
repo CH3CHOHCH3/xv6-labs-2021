@@ -82,9 +82,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+struct vma {
+  uint64 start;   // 界定范围
+  int len;
+
+  int prot;       // 读写权限
+  int flags;      // 是否共享
+  struct file *f;
+};
+#define VMACNT 16
+
 // Per-process state
 struct proc {
   struct spinlock lock;
+  struct vma vmas[VMACNT];         // 用于 mmap
 
   // p->lock must be held when using these:
   enum procstate state;        // Process state

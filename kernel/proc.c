@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -281,6 +285,13 @@ fork(void)
     return -1;
   }
 
+  for(int i = 0; i < VMACNT; ++i){
+    np->vmas[i] = p->vmas[i];
+    if(p->vmas[i].f){
+      np->vmas[i].f = filedup(p->vmas[i].f);
+    }
+  }
+  
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -315,6 +326,7 @@ fork(void)
   np->state = RUNNABLE;
   release(&np->lock);
 
+
   return pid;
 }
 
@@ -333,6 +345,62 @@ reparent(struct proc *p)
   }
 }
 
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+int munmap(uint64 start, int len){
+  struct proc *p = myproc();
+  // 找到待释放区域对应的 vma
+  int idx = -1;
+  for(int i = 0; i < VMACNT; ++i){
+    if(p->vmas[i].start == 0) continue;
+    if(p->vmas[i].start <= start &&
+      (p->vmas[i].start + p->vmas[i].len) >= (start + len)){
+        idx = i;
+        break;
+    }
+  }
+  // 找不到对应的映射区域
+  if(idx < 0){
+    return -1;
+  }
+
+  for(uint64 va = start; va < start + len; va += PGSIZE){
+    // 遍历要解除映射的每个页
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if(pte == 0){
+      continue;
+    }
+    if((*pte & PTE_V) == 0){
+      continue;
+    }
+
+    uint64 addr = PTE2PA(*pte);
+    if(*pte & PTE_D && (p->vmas[idx].flags & MAP_SHARED)){
+      // 被修改的页，需要写回原文件
+      uint off = va - p->vmas[idx].start;
+      begin_op();
+      ilock(p->vmas[idx].f->ip);
+      int wcnt = writei(p->vmas[idx].f->ip, 0, addr,
+        off,
+        min(PGSIZE, p->vmas[idx].f->ip->size - off)
+      );
+      iunlock(p->vmas[idx].f->ip);
+      end_op();
+      if(wcnt < 0) return -1;
+    }
+    kfree((void*)addr);
+    *pte = 0;
+  }
+
+  if(len == p->vmas[idx].len){
+    // 解除了全部映射
+    p->vmas[idx].start = 0;
+    p->vmas[idx].len = 0;
+    fileclose(p->vmas[idx].f);
+  }
+  return 0;
+}
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -343,7 +411,11 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
-
+  for(int i = 0; i < VMACNT; ++i){
+    if(p->vmas[i].start){
+      munmap(p->vmas[i].start, p->vmas[i].len);
+    }
+  }
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){

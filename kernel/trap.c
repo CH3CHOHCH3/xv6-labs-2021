@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -65,6 +69,51 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
+    // 检查是否是 mmap 造成的缺页
+    int flag = 0;
+    uint64 val = r_stval();
+    struct proc *p = myproc();
+    for(int i = 0; i < VMACNT; ++i){
+      if(p->vmas[i].start){
+        if(val >= p->vmas[i].start && val < p->vmas[i].start + p->vmas[i].len){
+          flag = 1;
+          // 分配一个物理页，把文件对应部分内容读进去；
+          uint64 addr = (uint64)kalloc();
+          memset((void*)addr, 0, PGSIZE);
+
+          if(addr == 0){
+            p->killed = 1;
+          } else {
+            struct inode *ip = (p->vmas[i].f)->ip;
+            ilock(ip);
+            int rcnt = readi(ip, 0, addr, PGROUNDDOWN(val - p->vmas[i].start), PGSIZE);
+            iunlock(ip);
+
+            if(rcnt > 0){
+              // 把虚拟地址映射到该物理页；
+              pte_t *pte = walk(p->pagetable, val, 1);
+              if(pte == 0){
+                kfree((void *)addr);
+                p->killed = 1;
+              }
+              *pte = PA2PTE(addr) | PTE_V | PTE_U;
+              if(p->vmas[i].prot & PROT_READ)
+                *pte |= PTE_R;
+              if(p->vmas[i].prot & PROT_WRITE)
+                *pte |= PTE_W;
+              // printf("val is %p pte is %p\n", val, *pte);
+            } else {
+              kfree((void *)addr);
+              p->killed = 1;
+            }
+          }
+        }
+      }
+    }
+    if(!flag){
+      p->killed = 1;
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
